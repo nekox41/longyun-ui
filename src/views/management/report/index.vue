@@ -9,7 +9,7 @@
       </el-form-item>
       <el-form-item label="报告类型" prop="reportType">
         <el-select v-model="queryParams.reportType" placeholder="请选择报告类型" clearable style="width: 80px;">
-          <el-option v-for="dict in report_type" :key="dict.value" :label="dict.label" :value="dict.value"/>
+          <el-option v-for="dict in report_type" :key="dict.value" :label="dict.label" :value="dict.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="最终版本" prop="reportIsfinal">
@@ -30,6 +30,10 @@
       <el-col :span="1.5">
         <el-button type="primary" plain icon="Plus" @click="handleAdd"
           v-hasPermi="['management:report:add']">新增</el-button>
+      </el-col>
+      <el-col :span="1.5">
+        <el-button type="primary" plain icon="Plus" @click="handleBatchAdd"
+          v-hasPermi="['management:report:add']">批量新增</el-button>
       </el-col>
       <el-col :span="1.5">
         <el-button type="success" plain icon="Edit" :disabled="single" @click="handleUpdate"
@@ -81,7 +85,7 @@
       </el-table-column>
       <el-table-column label="报告文件" align="center" prop="reportFile">
         <template #default="scope">
-          <el-button type="primary" @click="downloadFile(scope.row.reportFile)">下载</el-button>
+          <el-button type="primary" @click="handleDownload(scope.row)">下载</el-button>
         </template>
       </el-table-column>
       <el-table-column label="操作" align="center" class-name="small-padding fixed-width">
@@ -93,6 +97,25 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <!-- 下载展示 -->
+    <el-dialog :title="currentRow.title" :append-to-body="true" v-model="downloadActivate">
+      <el-table ref="myTable" :data="formatData(currentRow)" @selection-change="handleFileSelectionChange">
+        <el-table-column type="selection" width="55" align="center" />
+        <el-table-column label="文件名" align="center" prop="filename" />
+        <el-table-column label="操作" align="center">
+          <template #default="scope">
+            <el-button type="primary" @click="downloadSingleFile(scope.row.url)">下载</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button type="primary" @click="downloadSelectedFiles">批量下载</el-button>
+          <el-button @click="downloadActivate = false">关闭</el-button>
+        </div>
+      </template>
+    </el-dialog>
 
     <pagination v-show="total > 0" :total="total" v-model:page="queryParams.pageNum"
       v-model:limit="queryParams.pageSize" @pagination="getList" />
@@ -135,16 +158,27 @@
           </el-col>
           <el-col :span="12">
             <el-form-item label="最终版本" prop="reportIsfinal">
-              <el-select v-model="form.reportIsfinal" placeholder="请选择最终版本" >
+              <el-select v-model="form.reportIsfinal" placeholder="请选择最终版本">
                 <el-option v-for="dict in report_isfinal" :key="dict.value" :label="dict.label"
                   :value="dict.value"></el-option>
               </el-select>
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="报告文件" prop="reportFile">
-          <reportUpload v-model="form.reportFile" :fileSize="1024" :fileType="['pdf', 'doc', 'docx', 'zip', 'rar']" :reportType="form.reportIsfinal"/>
-        </el-form-item>
+        <el-row>
+          <el-col :span="12">
+            <el-form-item label="报告文件" prop="reportFile">
+              <reportUpload v-model="form.reportFile" :fileSize="1024" :fileType="['pdf', 'doc', 'docx']"
+                :reportType="form.reportIsfinal" :limit="1"/>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="附件" prop="reportAttach">
+              <reportUpload v-model="form.reportAttach" :fileSize="1024" :fileType="['zip', 'rar']"
+                :reportType="form.reportIsfinal" />
+            </el-form-item>
+          </el-col>
+        </el-row>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
@@ -153,13 +187,16 @@
         </div>
       </template>
     </el-dialog>
+
+    <batchAdd v-model="batchAddActivate" @submit="submitBatchAddForm"></batchAdd>
   </div>
 </template>
 
 <script setup name="Report">
 import { listReport, getReport, delReport, addReport, updateReport } from "@/api/management/report";
 import reportUpload from "./components/reportUpload.vue";
-import download from "@/plugins/download";
+import download from "@/plugins/download"
+import batchAdd from "./components/batchAdd.vue";
 
 const { proxy } = getCurrentInstance();
 const { report_isfinal, report_type } = proxy.useDict('report_isfinal', 'report_type');
@@ -173,6 +210,10 @@ const single = ref(true);
 const multiple = ref(true);
 const total = ref(0);
 const title = ref("");
+const downloadActivate = ref(false);
+const myTable = ref(null);
+const currentRow = ref({});
+const batchAddActivate = ref(false);
 
 const data = reactive({
   form: {},
@@ -200,14 +241,53 @@ const data = reactive({
 
 const { queryParams, form, rules } = toRefs(data);
 
-const downloadFile = (filePath) => {
-  download.resource(filePath);
-};
+
+function handleDownload(row) {
+  currentRow.value = row; // 设置当前行数据
+  downloadActivate.value = true; // 打开对话框
+}
+
+function downloadSingleFile(url) {
+  download.resource(url);
+}
+
+function downloadSelectedFiles() {
+  myTable.value.getSelectionRows().forEach(row => {
+    downloadSingleFile(row.url)
+  })
+}
+
+function formatData(data) {
+  // data: "/profile/upload/2025/05/17/WB-2_兰考糖果歌城_2025-05-01到2026-07-31_8000元(韩飞)_20250516075234A001_(最终版).pdf,/profile/upload/2025/05/17/xxx.zip"
+  // 将data进行格式化，返回[{filename: "xxx.pdf", url: "xxx"}]
+  let fileList = [];
+
+  if (data.reportFile) {
+    fileList.push(...data.reportFile.split(",").filter(Boolean));
+  }
+  if (data.reportAttach) {
+    fileList.push(...data.reportAttach.split(",").filter(Boolean));
+  }
+
+  return fileList.map(item => {
+    const parts = item.split("/");
+    const filename = parts.length > 1 ? parts.pop() : item;
+    return {
+      filename: filename,
+      url: item
+    };
+  });
+}
+
 /** 查询报告管理列表 */
 function getList() {
   loading.value = true;
   listReport(queryParams.value).then(response => {
-    reportList.value = response.rows;
+    reportList.value = response.rows.sort((a, b) => {
+      const timeA = a.updateTime ? new Date(a.updateTime) : new Date(a.createTime);
+      const timeB = b.updateTime ? new Date(b.updateTime) : new Date(b.createTime);
+      return timeB - timeA; // 最新在前
+    });
     total.value = response.total;
     loading.value = false;
   });
@@ -226,6 +306,7 @@ function reset() {
     reportId: null,
     reportName: null,
     reportFile: null,
+    reportAttach: null,
     reportType: null,
     reportIsfinal: null,
     reportManager: null,
@@ -264,6 +345,11 @@ function handleAdd() {
   title.value = "上传报告";
 }
 
+// 批量新增
+function handleBatchAdd() {
+  batchAddActivate.value = true;
+}
+
 /** 修改按钮操作 */
 function handleUpdate(row) {
   reset();
@@ -294,6 +380,14 @@ function submitForm() {
       }
     }
   });
+}
+
+function submitBatchAddForm(list) {
+  list.forEach(item => {
+    addReport(item);
+  })
+  getList();
+  batchAddActivate.value = false;
 }
 
 /** 删除按钮操作 */
